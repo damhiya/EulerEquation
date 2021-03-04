@@ -1,10 +1,7 @@
-#include <cassert>
 #include <iostream>
 #include <fstream>
-#include <vector>
 
 #include <Eigen/Sparse>
-#include <Eigen/LU>
 
 const size_t NX = 50;
 const size_t NY = 50;
