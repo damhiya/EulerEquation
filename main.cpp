@@ -18,9 +18,9 @@ const double p0 = 0.0;
 using Vector  = Eigen::VectorXd;
 using Matrix  = Eigen::SparseMatrix<double>;
 using View    = Eigen::Map<Eigen::Matrix<double, NX, NY>>;
-using Triplet =  Eigen::Triplet<double>;
+using Triplet = Eigen::Triplet<double>;
 
-double access(View& v, double l, double r, double b, double t, int i, int j) {
+double access_(Vector& v, size_t offset, double l, double r, double b, double t, int i, int j) {
   if (i == -1)
     return l;
   else if (i == NX)
@@ -30,7 +30,7 @@ double access(View& v, double l, double r, double b, double t, int i, int j) {
   else if (j == NY)
     return t;
   else
-    return v(i,j);
+    return v[offset + i + NX*j];
 }
 
 void assign(Matrix& A, int fo, int xo, int fi, int fj, int xi, int xj, double v) {
@@ -50,25 +50,24 @@ void calc(
     Vector& y,
     Matrix& J) {
 
-  View ux_prev_view(x_prev.data());
-  View uy_prev_view(x_prev.data() + N);
-  View p_prev_view(x_prev.data() + 2*N);
-
-  View ux_view(x.data());
-  View uy_view(x.data() + N);
-  View p_view(x.data() + 2*N);
+  const size_t ux = 0;
+  const size_t uy = 1;
+  const size_t p  = 2;
 
   View f1(y.data());
   View f2(y.data() + N);
   View f3(y.data() + 2*N);
 
-  auto ux_prev = [&] (int i, int j) {return access(ux_prev_view, 0.0, 0.0, 0.0, u_lid, i, j);};
-  auto uy_prev = [&] (int i, int j) {return access(uy_prev_view, 0.0, 0.0, 0.0, 0.0, i, j);};
-  auto p_prev  = [&] (int i, int j) {return access(p_prev_view, p0, p0, p0, p0, i, j);};
-
-  auto ux = [&] (int i, int j) {return access(ux_view, 0.0, 0.0, 0.0, u_lid, i, j);};
-  auto uy = [&] (int i, int j) {return access(uy_view, 0.0, 0.0, 0.0, 0.0, i, j);};
-  auto p  = [&] (int i, int j) {return access(p_view, p0, p0, p0, p0, i, j);};
+  auto access = [&] (Vector& v, size_t f_id, int i, int j) {
+    if (f_id == ux)
+      return access_(v, ux*N, 0.0, 0.0, 0.0, u_lid, i, j);
+    else if (f_id == uy)
+      return access_(v, uy*N, 0.0, 0.0, 0.0, 0.0, i, j);
+    else if (f_id == p)
+      return access_(v, p *N, p0, p0, p0, p0, i, j);
+    else
+      exit(-1);
+  };
 
   auto assign_f1_ux = [&] (int fi, int fj, int xi, int xj, double v) {assign(J,   0,   0, fi, fj, xi, xj, v);};
   auto assign_f1_uy = [&] (int fi, int fj, int xi, int xj, double v) {assign(J,   0,   N, fi, fj, xi, xj, v);};
@@ -98,16 +97,42 @@ void calc(
    *  p(i,-1) = p0
    *  p(i,NY) = p0
    */
- 
+
+  auto laplace = [&] (size_t f_id, int i, int j) {
+    return access(x, f_id, i+1, j)
+         + access(x, f_id, i-1, j)
+         + access(x, f_id, i,   j+1)
+         + access(x, f_id, i,   j-1)
+     - 4 * access(x, f_id, i,   j);
+  };
+  
+  auto diff_x = [&] (size_t f_id, int i, int j) {
+    return (access(x,      f_id, i+1, j) - access(x,      f_id, i-1, j))
+         + (access(x_prev, f_id, i+1, j) - access(x_prev, f_id, i-1, j));
+  };
+
+  auto diff_y = [&] (size_t f_id, int i, int j) {
+    return (access(x,      f_id, i, j+1) - access(x,      f_id, i, j-1))
+         + (access(x_prev, f_id, i, j+1) - access(x_prev, f_id, i, j-1));
+  };
+  
+  auto diff_t = [&] (size_t f_id, int i, int j) {
+    return access(x, f_id, i, j) - access(x_prev, f_id, i, j);
+  };
+  
+  auto cent_t = [&] (size_t f_id, int i, int j) {
+    return access(x, f_id, i, j) + access(x_prev, f_id, i, j);
+  };
+
   for (int j=0; j<NY; j++) {
     for (int i=0; i<NX; i++) {
-      const double ux_ = ux(i,j) + ux_prev(i,j);
-      const double uy_ = uy(i,j) + uy_prev(i,j);
-      const double ux_t_ = ux(i,j) - ux_prev(i,j);
-      const double ux_x_ = ux(i+1,j) - ux(i-1,j) + ux_prev(i+1,j) - ux_prev(i-1,j);
-      const double ux_y_ = ux(i,j+1) - ux(i,j-1) + ux_prev(i,j+1) - ux_prev(i,j-1);
-      const double p_x_ = p(i+1,j) - p(i-1,j) + p_prev(i+1,j) - p_prev(i-1,j);
-      const double la_ux_ = ux(i+1,j) + ux(i-1,j) + ux(i,j+1) + ux(i,j-1) - 4.0*ux(i,j);
+      const double ux_ = cent_t(ux, i, j);
+      const double uy_ = cent_t(uy, i, j);
+      const double ux_t_ = diff_t(ux, i, j);
+      const double ux_x_ = diff_x(ux, i, j);
+      const double ux_y_ = diff_y(ux, i, j);
+      const double p_x_  = diff_x(p,  i, j);
+      const double la_ux_ = laplace(ux, i, j);
       f1(i,j) = 8.0 * r * ux_t_
               + ux_ * ux_x_
               + uy_ * ux_y_
@@ -126,13 +151,13 @@ void calc(
 
   for (int j=0; j<NY; j++) {
     for (int i=0; i<NX; i++) {
-      const double ux_ = ux(i,j) + ux_prev(i,j);
-      const double uy_ = uy(i,j) + uy_prev(i,j);
-      const double uy_t_ = uy(i,j) - uy_prev(i,j);
-      const double uy_x_ = uy(i+1,j) - uy(i-1,j) + uy_prev(i+1,j) - uy_prev(i-1,j);
-      const double uy_y_ = uy(i,j+1) - uy(i,j-1) + uy_prev(i,j+1) - uy_prev(i,j-1);
-      const double p_y_ = p(i,j+1) - p(i,j-1) + p_prev(i,j+1) - p_prev(i,j-1);
-      const double la_uy_ = uy(i+1,j) + uy(i-1,j) + uy(i,j+1) + uy(i,j-1) - 4.0*uy(i,j);
+      const double ux_ = cent_t(ux, i, j);
+      const double uy_ = cent_t(uy, i, j);
+      const double uy_t_ = diff_t(uy, i, j);
+      const double uy_x_ = diff_x(uy, i, j);
+      const double uy_y_ = diff_y(uy, i, j);
+      const double p_y_  = diff_y(p , i, j);
+      const double la_uy_ = laplace(uy, i, j);
       f2(i,j) = 8.0 * r * uy_t_
               + ux_ * uy_x_
               + uy_ * uy_y_
@@ -151,11 +176,11 @@ void calc(
 
   for (int j=0; j<NY; j++) {
     for (int i=0; i<NX; i++) {
-      const double ux_x_ = ux(i+1,j) - ux(i-1,j);
-      const double ux_y_ = ux(i,j+1) - ux(i,j-1);
-      const double uy_x_ = uy(i+1,j) - uy(i-1,j);
-      const double uy_y_ = uy(i,j+1) - uy(i,j-1);
-      const double la_p_ = p(i+1,j) + p(i-1,j) + p(i,j+1) + p(i,j-1) - 4.0*p(i,j);
+      const double ux_x_ = diff_x(ux, i, j);
+      const double ux_y_ = diff_y(ux, i, j);
+      const double uy_x_ = diff_x(uy, i, j);
+      const double uy_y_ = diff_y(uy, i, j);
+      const double la_p_ = laplace(p, i, j);
       f3(i,j) = ux_x_*ux_x_ + 2.0*uy_x_*ux_y_ + uy_y_*uy_y_ + (4.0/rho) * la_p_;
       assign_f3_ux(i, j, i+1, j,    2.0*ux_x_);
       assign_f3_ux(i, j, i-1, j,   -2.0*ux_x_);
