@@ -17,4 +17,8 @@ sns.heatmap(data[49,0,:,:], ax=ax[0], xticklabels=False, yticklabels=False, cmap
 sns.heatmap(data[49,1,:,:], ax=ax[1], xticklabels=False, yticklabels=False, cmap="viridis")
 sns.heatmap(data[49,2,:,:], ax=ax[2], xticklabels=False, yticklabels=False, cmap="viridis")
 
+ax[0].invert_yaxis()
+ax[1].invert_yaxis()
+ax[2].invert_yaxis()
+
 plt.show()
